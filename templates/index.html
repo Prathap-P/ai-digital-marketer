@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Digital Marketer — New Post</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+  <style>
+    body { max-width: 860px; margin: 0 auto; padding: 2rem 1rem; }
+    h1 { margin-bottom: 0.25rem; }
+    .subtitle { color: var(--pico-muted-color); margin-bottom: 2rem; font-size: 0.95rem; }
+    .url-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+    .url-row input { flex: 1; margin-bottom: 0; }
+    .remove-url { background: none; border: 1px solid var(--pico-muted-border-color);
+                  color: var(--pico-muted-color); padding: 0.3rem 0.6rem; border-radius: 4px;
+                  cursor: pointer; font-size: 0.85rem; }
+    .remove-url:hover { border-color: var(--pico-del-color); color: var(--pico-del-color); }
+    .platform-grid { display: flex; gap: 2rem; }
+    .platform-option { display: flex; align-items: center; gap: 0.5rem; }
+    .platform-option input[type="checkbox"] { width: 1.1rem; height: 1.1rem; margin: 0; }
+    .platform-label { font-weight: 500; font-size: 0.95rem; }
+    fieldset { border: 1px solid var(--pico-muted-border-color); border-radius: 8px; padding: 1rem 1.25rem; }
+    legend { font-weight: 600; padding: 0 0.4rem; font-size: 0.9rem; }
+    #add-url-btn { font-size: 0.85rem; padding: 0.3rem 0.8rem; }
+    .submit-row { margin-top: 1.5rem; }
+    textarea { min-height: 180px; resize: vertical; }
+    .error-banner { background: #fff0f0; color: #c0392b; border: 1px solid #e74c3c;
+                    border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>AI Digital Marketer</h1>
+  <p class="subtitle">Paste your material below. The system will generate platform-specific posts for review.</p>
+
+  {% if error %}
+  <div class="error-banner">{{ error }}</div>
+  {% endif %}
+
+  <form method="POST" action="/generate" id="generate-form">
+
+    <!-- ── Write-up ─────────────────────────────────────────────────────── -->
+    <label for="writeup">
+      <strong>Your write-up / context</strong>
+      <small style="font-weight:normal; color: var(--pico-muted-color)"> — paste your notes, key points, or a summary</small>
+    </label>
+    <textarea
+      id="writeup"
+      name="writeup"
+      placeholder="Describe the topic, include key insights, why it matters, and any angles you want highlighted…"
+      required
+    ></textarea>
+
+    <!-- ── Resource URLs ─────────────────────────────────────────────────── -->
+    <fieldset>
+      <legend>Resource URLs</legend>
+      <div id="url-list">
+        <div class="url-row">
+          <input type="url" name="urls" placeholder="https://example.com/article" />
+          <button type="button" class="remove-url" onclick="removeUrl(this)">✕</button>
+        </div>
+      </div>
+      <button type="button" id="add-url-btn" class="secondary outline" onclick="addUrl()">+ Add URL</button>
+    </fieldset>
+
+    <!-- ── Platform selection ─────────────────────────────────────────────── -->
+    <fieldset style="margin-top: 1rem;">
+      <legend>Generate posts for</legend>
+      <div class="platform-grid">
+        <label class="platform-option">
+          <input type="checkbox" name="platforms" value="linkedin" checked />
+          <span class="platform-label">LinkedIn</span>
+        </label>
+        <label class="platform-option">
+          <input type="checkbox" name="platforms" value="reddit" checked />
+          <span class="platform-label">Reddit</span>
+        </label>
+      </div>
+    </fieldset>
+
+    <!-- ── Submit ──────────────────────────────────────────────────────────── -->
+    <div class="submit-row">
+      <button type="submit" id="submit-btn">Generate posts →</button>
+    </div>
+  </form>
+
+  <script>
+    function addUrl() {
+      const list = document.getElementById('url-list');
+      const row = document.createElement('div');
+      row.className = 'url-row';
+      row.innerHTML = `
+        <input type="url" name="urls" placeholder="https://example.com/article" />
+        <button type="button" class="remove-url" onclick="removeUrl(this)">✕</button>
+      `;
+      list.appendChild(row);
+      row.querySelector('input').focus();
+    }
+
+    function removeUrl(btn) {
+      const allRows = document.querySelectorAll('.url-row');
+      // Keep at least one row
+      if (allRows.length > 1) {
+        btn.parentElement.remove();
+      } else {
+        btn.parentElement.querySelector('input').value = '';
+      }
+    }
+
+    // Show loading state on submit
+    document.getElementById('generate-form').addEventListener('submit', function () {
+      const btn = document.getElementById('submit-btn');
+      btn.textContent = 'Generating…';
+      btn.disabled = true;
+    });
+  </script>
+</body>
+</html>

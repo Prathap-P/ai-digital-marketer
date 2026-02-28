@@ -1,0 +1,313 @@
+"""
+FastAPI application entry point.
+
+Routes
+------
+GET  /                            Render the input form.
+POST /generate                    Parse form, generate drafts, create session.
+GET  /review/{session_id}         Render the per-platform review page.
+POST /regenerate                  Regenerate a single platform draft (JSON, AJAX).
+POST /sync-draft                  Sync an edited textarea back to the session (JSON, AJAX).
+POST /schedule                    Schedule a platform's draft (JSON, AJAX).
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import uuid
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Annotated
+
+from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+
+from config import settings
+from models.schemas import (
+    Platform,
+    PlatformDraft,
+    RegenerateRequest,
+    ScheduleRequest,
+    ScheduleResult,
+)
+from platforms.base import Platform as BasePlatform
+from platforms.linkedin import LinkedInPlatform
+from platforms.reddit import RedditPlatform
+from services.post_generator import generate_drafts, regenerate_draft
+from services.scheduler import scheduler
+
+# ── Logging ────────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# ── Platform registry ──────────────────────────────────────────────────────────
+# To add a new platform: instantiate it here and add it to this dict.
+PLATFORM_REGISTRY: dict[str, BasePlatform] = {
+    Platform.LINKEDIN.value: LinkedInPlatform(),
+    Platform.REDDIT.value: RedditPlatform(),
+}
+
+
+# ── Session store (in-memory) ──────────────────────────────────────────────────
+@dataclass
+class SessionData:
+    """Holds all state for one drafting session."""
+
+    drafts: dict[str, PlatformDraft]  # keyed by Platform.value
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_accessed: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def touch(self) -> None:
+        """Update the last-accessed timestamp."""
+        self.last_accessed = datetime.now(timezone.utc)
+
+
+_sessions: dict[str, SessionData] = {}
+_sessions_lock = threading.Lock()
+
+
+def _create_session(drafts: list[PlatformDraft]) -> str:
+    """Store drafts in a new session and return the session ID."""
+    session_id = str(uuid.uuid4())
+    data = SessionData(drafts={d.platform.value: d for d in drafts})
+    with _sessions_lock:
+        _sessions[session_id] = data
+    return session_id
+
+
+def _get_session(session_id: str) -> SessionData:
+    """Retrieve a session, updating its last-accessed time.
+
+    Raises:
+        HTTPException 404: If the session does not exist or has expired.
+    """
+    with _sessions_lock:
+        session = _sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found or expired.")
+    session.touch()
+    return session
+
+
+def _evict_expired_sessions() -> None:
+    """Remove sessions older than SESSION_TTL_MINUTES. Called by APScheduler."""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=settings.session_ttl_minutes)
+    with _sessions_lock:
+        expired = [sid for sid, s in _sessions.items() if s.last_accessed < cutoff]
+        for sid in expired:
+            del _sessions[sid]
+    if expired:
+        logger.info("Evicted %d expired session(s).", len(expired))
+
+
+# ── App lifespan ───────────────────────────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):  # noqa: ARG001
+    """Start APScheduler on startup; stop it on shutdown."""
+    scheduler.add_job(
+        _evict_expired_sessions,
+        trigger="interval",
+        minutes=30,
+        id="session_eviction",
+        replace_existing=True,
+    )
+    scheduler.start()
+    logger.info("APScheduler started.")
+    yield
+    scheduler.shutdown(wait=False)
+    logger.info("APScheduler stopped.")
+
+
+# ── FastAPI app ────────────────────────────────────────────────────────────────
+app = FastAPI(title="AI Digital Marketer", lifespan=lifespan)
+templates = Jinja2Templates(directory="templates")
+
+
+# ── Routes ─────────────────────────────────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request) -> HTMLResponse:
+    """Render the input form."""
+    return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.post("/generate", response_class=HTMLResponse)
+async def generate(
+    request: Request,
+    writeup: Annotated[str, Form()],
+) -> HTMLResponse:
+    """Parse the submitted form, generate drafts for all selected platforms,
+    store in a new session, and redirect to the review page.
+    """
+    form = await request.form()
+
+    # Extract multi-value fields manually (FastAPI Form doesn't auto-collect lists
+    # when keys repeat in multipart/form-urlencoded)
+    urls: list[str] = [
+        v for k, v in form.multi_items() if k == "urls" and v.strip()
+    ]
+    raw_platforms: list[str] = [
+        v for k, v in form.multi_items() if k == "platforms"
+    ]
+
+    # Validate platform values
+    selected_platforms: list[Platform] = []
+    for p in raw_platforms:
+        try:
+            selected_platforms.append(Platform(p))
+        except ValueError:
+            logger.warning("Unknown platform in form submission: %s", p)
+
+    if not selected_platforms:
+        return templates.TemplateResponse(
+            "index.html",
+            {
+                "request": request,
+                "error": "Please select at least one platform.",
+            },
+            status_code=400,
+        )
+
+    # Build the combined input string
+    parts = [writeup.strip()]
+    if urls:
+        parts.append("\nReference URLs:")
+        parts.extend(f"- {url}" for url in urls)
+    combined_input = "\n".join(parts)
+
+    try:
+        drafts = generate_drafts(input_text=combined_input, platforms=selected_platforms)
+    except Exception as exc:
+        logger.exception("Draft generation failed: %s", exc)
+        return templates.TemplateResponse(
+            "index.html",
+            {
+                "request": request,
+                "error": f"Failed to generate drafts: {exc}",
+            },
+            status_code=500,
+        )
+
+    session_id = _create_session(drafts)
+    logger.info("Session created: %s (%d drafts)", session_id, len(drafts))
+    return RedirectResponse(url=f"/review/{session_id}", status_code=303)
+
+
+@app.get("/review/{session_id}", response_class=HTMLResponse)
+async def review(request: Request, session_id: str) -> HTMLResponse:
+    """Render the review page for a given session."""
+    session = _get_session(session_id)
+    drafts = list(session.drafts.values())
+    return templates.TemplateResponse(
+        "review.html",
+        {
+            "request": request,
+            "session_id": session_id,
+            "drafts": drafts,
+            "default_subreddits": settings.reddit_default_subreddits_list,
+        },
+    )
+
+
+@app.post("/regenerate")
+async def regenerate(body: RegenerateRequest) -> dict:
+    """Regenerate a single platform's draft using a follow-up instruction.
+
+    Returns the updated draft content as JSON so the UI can update in place.
+    """
+    session = _get_session(body.session_id)
+
+    try:
+        updated_draft = regenerate_draft(follow_up=body.follow_up, platform=body.platform)
+    except Exception as exc:
+        logger.exception("Regeneration failed for %s: %s", body.platform.value, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # Preserve the previously selected subreddit (if any)
+    existing = session.drafts.get(body.platform.value)
+    if existing and existing.subreddit:
+        updated_draft = updated_draft.model_copy(update={"subreddit": existing.subreddit})
+
+    session.drafts[body.platform.value] = updated_draft
+    logger.info("Draft regenerated for session %s, platform %s", body.session_id, body.platform.value)
+
+    return {"platform": body.platform.value, "content": updated_draft.content}
+
+
+@app.post("/sync-draft")
+async def sync_draft(body: dict) -> dict:
+    """Sync the user's edited textarea content back to the server-side session.
+
+    Expected JSON body: { session_id, platform, content }
+    Called automatically before scheduling so the final edits are preserved.
+    """
+    session_id: str = body.get("session_id", "")
+    platform_raw: str = body.get("platform", "")
+    content: str = body.get("content", "")
+
+    if not session_id or not platform_raw:
+        raise HTTPException(status_code=422, detail="session_id and platform are required.")
+
+    try:
+        platform = Platform(platform_raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Unknown platform: {platform_raw}") from exc
+
+    session = _get_session(session_id)
+
+    existing = session.drafts.get(platform.value)
+    if existing is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No draft found for platform '{platform.value}' in this session.",
+        )
+
+    session.drafts[platform.value] = existing.model_copy(update={"content": content})
+    return {"status": "synced"}
+
+
+@app.post("/schedule")
+async def schedule(body: ScheduleRequest) -> ScheduleResult:
+    """Schedule the current draft for a platform to post 24 hours from now."""
+    session = _get_session(body.session_id)
+
+    draft = session.drafts.get(body.platform.value)
+    if draft is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No draft for platform '{body.platform.value}' in this session.",
+        )
+
+    # Override subreddit if supplied, then persist back to session
+    if body.subreddit:
+        draft = draft.model_copy(update={"subreddit": body.subreddit})
+        session.drafts[body.platform.value] = draft
+
+    platform_handler = PLATFORM_REGISTRY.get(body.platform.value)
+    if platform_handler is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Platform '{body.platform.value}' is not configured.",
+        )
+
+    post_at = datetime.now(timezone.utc) + timedelta(hours=24)
+
+    try:
+        result = platform_handler.schedule(draft=draft, post_at=post_at)
+    except (ValueError, RuntimeError) as exc:
+        logger.exception("Scheduling failed for %s: %s", body.platform.value, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    logger.info(
+        "Scheduled %s for session %s at %s",
+        body.platform.value,
+        body.session_id,
+        post_at.isoformat(),
+    )
+    return result

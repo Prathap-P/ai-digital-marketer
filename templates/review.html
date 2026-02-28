@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Digital Marketer — Review Drafts</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+  <style>
+    body { max-width: 1200px; margin: 0 auto; padding: 2rem 1rem; }
+
+    h1 { margin-bottom: 0.25rem; }
+    .subtitle { color: var(--pico-muted-color); margin-bottom: 2rem; font-size: 0.95rem; }
+
+    .drafts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .platform-card {
+      border: 1px solid var(--pico-muted-border-color);
+      border-radius: 10px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .platform-badge {
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+    }
+    .badge-linkedin { background: #0077B5; color: #fff; }
+    .badge-reddit   { background: #FF4500; color: #fff; }
+
+    .card-header h2 { margin: 0; font-size: 1.15rem; }
+
+    .draft-textarea {
+      width: 100%;
+      min-height: 240px;
+      resize: vertical;
+      font-family: inherit;
+      font-size: 0.9rem;
+      padding: 0.75rem;
+      border: 1px solid var(--pico-muted-border-color);
+      border-radius: 6px;
+      background: var(--pico-background-color);
+      color: var(--pico-color);
+      box-sizing: border-box;
+      transition: border-color 0.2s;
+    }
+    .draft-textarea:focus { outline: none; border-color: var(--pico-primary); }
+
+    .char-counter {
+      font-size: 0.78rem;
+      color: var(--pico-muted-color);
+      text-align: right;
+      margin-top: -0.5rem;
+    }
+    .char-counter.over-limit { color: #e74c3c; }
+
+    .section-label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--pico-muted-color);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.35rem;
+    }
+
+    .subreddit-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .subreddit-prefix {
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: #FF4500;
+      white-space: nowrap;
+    }
+    .subreddit-row input { flex: 1; margin-bottom: 0; }
+
+    .followup-section { display: flex; flex-direction: column; gap: 0.5rem; }
+    .followup-textarea {
+      width: 100%;
+      min-height: 80px;
+      resize: vertical;
+      font-family: inherit;
+      font-size: 0.88rem;
+      padding: 0.6rem 0.75rem;
+      border: 1px solid var(--pico-muted-border-color);
+      border-radius: 6px;
+      background: var(--pico-background-color);
+      color: var(--pico-color);
+      box-sizing: border-box;
+    }
+    .followup-textarea:focus { outline: none; border-color: var(--pico-primary); }
+
+    .card-actions {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .card-actions button { flex: 1; min-width: 120px; }
+
+    .btn-regenerate { background: var(--pico-secondary-background); color: var(--pico-secondary-inverse); }
+    .btn-schedule   { background: #27ae60; border-color: #27ae60; color: #fff; }
+    .btn-schedule:hover { background: #219a52; border-color: #219a52; }
+    .btn-schedule:disabled, .btn-regenerate:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    .status-msg {
+      font-size: 0.85rem;
+      border-radius: 6px;
+      padding: 0.6rem 0.9rem;
+      display: none;
+    }
+    .status-msg.visible { display: block; }
+    .status-msg.loading  { background: #eef5fb; color: #2980b9;  }
+    .status-msg.success  { background: #eafaf1; color: #27ae60;  }
+    .status-msg.error    { background: #fff0f0; color: #c0392b;  }
+
+    .back-link { font-size: 0.88rem; color: var(--pico-muted-color); }
+    .back-link a { color: inherit; }
+  </style>
+</head>
+<body>
+  <p class="back-link"><a href="/">← Start over with new material</a></p>
+  <h1>Review drafts</h1>
+  <p class="subtitle">
+    Edit each draft directly, leave a follow-up instruction to refine, or schedule when you're happy.
+    Posts are scheduled <strong>24 hours from now</strong>.
+  </p>
+
+  <div class="drafts-grid">
+    {% for draft in drafts %}
+    <div class="platform-card" id="card-{{ draft.platform.value }}">
+
+      <!-- Header -->
+      <div class="card-header">
+        <span class="platform-badge
+          {% if draft.platform.value == 'linkedin' %}badge-linkedin
+          {% else %}badge-reddit{% endif %}">
+          {{ draft.platform.value }}
+        </span>
+        <h2>
+          {% if draft.platform.value == 'linkedin' %}LinkedIn Post
+          {% else %}Reddit Post{% endif %}
+        </h2>
+      </div>
+
+      <!-- Reddit: subreddit selector -->
+      {% if draft.platform.value == 'reddit' %}
+      <div>
+        <p class="section-label">Target subreddit</p>
+        <div class="subreddit-row">
+          <span class="subreddit-prefix">r/</span>
+          <input
+            type="text"
+            id="subreddit-{{ draft.platform.value }}"
+            list="subreddit-suggestions"
+            value="{{ default_subreddits[0] if default_subreddits else 'MachineLearning' }}"
+            placeholder="MachineLearning"
+          />
+        </div>
+        <datalist id="subreddit-suggestions">
+          {% for sub in default_subreddits %}
+          <option value="{{ sub }}"></option>
+          {% endfor %}
+        </datalist>
+      </div>
+      {% endif %}
+
+      <!-- Draft content -->
+      <div>
+        <p class="section-label">Generated draft</p>
+        <textarea
+          class="draft-textarea"
+          id="draft-{{ draft.platform.value }}"
+          oninput="updateCharCount('{{ draft.platform.value }}')"
+        >{{ draft.content }}</textarea>
+        <p class="char-counter" id="counter-{{ draft.platform.value }}"></p>
+      </div>
+
+      <!-- Follow-up / refinement -->
+      <div class="followup-section">
+        <p class="section-label">Refine this draft</p>
+        <textarea
+          class="followup-textarea"
+          id="followup-{{ draft.platform.value }}"
+          placeholder="e.g. Make the tone more casual, add a real-world analogy, shorten to 800 chars…"
+        ></textarea>
+      </div>
+
+      <!-- Status message -->
+      <div class="status-msg" id="status-{{ draft.platform.value }}"></div>
+
+      <!-- Action buttons -->
+      <div class="card-actions">
+        <button
+          class="btn-regenerate secondary"
+          id="regen-btn-{{ draft.platform.value }}"
+          onclick="regenerate('{{ draft.platform.value }}', '{{ session_id }}')"
+        >↻ Regenerate</button>
+
+        <button
+          class="btn-schedule"
+          id="schedule-btn-{{ draft.platform.value }}"
+          onclick="scheduleDraft('{{ draft.platform.value }}', '{{ session_id }}')"
+        >Schedule (24 h)</button>
+      </div>
+
+    </div>
+    {% endfor %}
+  </div>
+
+  <script>
+    // ── Character counter ───────────────────────────────────────────────────
+    const LIMITS = { linkedin: 1300, reddit: Infinity };
+
+    function updateCharCount(platform) {
+      const ta = document.getElementById('draft-' + platform);
+      const counter = document.getElementById('counter-' + platform);
+      const count = ta.value.length;
+      const limit = LIMITS[platform];
+      counter.textContent = limit === Infinity
+        ? `${count} characters`
+        : `${count} / ${limit} characters`;
+      counter.classList.toggle('over-limit', count > limit);
+    }
+
+    // Initialise counters on load
+    document.querySelectorAll('.draft-textarea').forEach(ta => {
+      const platform = ta.id.replace('draft-', '');
+      updateCharCount(platform);
+    });
+
+    // ── Helpers ─────────────────────────────────────────────────────────────
+    function setStatus(platform, type, message) {
+      const el = document.getElementById('status-' + platform);
+      el.className = 'status-msg visible ' + type;
+      el.textContent = message;
+    }
+
+    function clearStatus(platform) {
+      const el = document.getElementById('status-' + platform);
+      el.className = 'status-msg';
+      el.textContent = '';
+    }
+
+    function setButtonsDisabled(platform, disabled) {
+      document.getElementById('regen-btn-' + platform).disabled = disabled;
+      document.getElementById('schedule-btn-' + platform).disabled = disabled;
+    }
+
+    // ── Regenerate (AJAX) ────────────────────────────────────────────────────
+    async function regenerate(platform, sessionId) {
+      const followUp = document.getElementById('followup-' + platform).value.trim();
+      if (!followUp) {
+        setStatus(platform, 'error', 'Please enter a follow-up instruction before regenerating.');
+        return;
+      }
+
+      clearStatus(platform);
+      setButtonsDisabled(platform, true);
+      setStatus(platform, 'loading', 'Regenerating…');
+
+      try {
+        const resp = await fetch('/regenerate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId, platform, follow_up: followUp }),
+        });
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+          throw new Error(data.detail || `Server error ${resp.status}`);
+        }
+
+        document.getElementById('draft-' + platform).value = data.content;
+        document.getElementById('followup-' + platform).value = '';
+        updateCharCount(platform);
+        setStatus(platform, 'success', 'Draft updated. Edit further or schedule when ready.');
+      } catch (err) {
+        setStatus(platform, 'error', 'Regeneration failed: ' + err.message);
+      } finally {
+        setButtonsDisabled(platform, false);
+      }
+    }
+
+    // ── Schedule (AJAX) ──────────────────────────────────────────────────────
+    async function scheduleDraft(platform, sessionId) {
+      clearStatus(platform);
+      setButtonsDisabled(platform, true);
+      setStatus(platform, 'loading', 'Scheduling…');
+
+      // Sync the edited textarea content back to the server before scheduling
+      const content = document.getElementById('draft-' + platform).value;
+      const subreddit = platform === 'reddit'
+        ? document.getElementById('subreddit-' + platform)?.value.trim()
+        : null;
+
+      try {
+        // First, sync the edited draft
+        await fetch('/sync-draft', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId, platform, content }),
+        });
+
+        // Then schedule
+        const body = { session_id: sessionId, platform };
+        if (subreddit) body.subreddit = subreddit;
+
+        const resp = await fetch('/schedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+          throw new Error(data.detail || `Server error ${resp.status}`);
+        }
+
+        const schedBtn = document.getElementById('schedule-btn-' + platform);
+        schedBtn.textContent = '✓ Scheduled';
+        schedBtn.style.background = '#95a5a6';
+        schedBtn.style.borderColor = '#95a5a6';
+        setStatus(platform, 'success',
+          `Scheduled for ${new Date(data.scheduled_at_utc).toLocaleString()} — ${data.detail || ''}`
+        );
+      } catch (err) {
+        setButtonsDisabled(platform, false);
+        setStatus(platform, 'error', 'Scheduling failed: ' + err.message);
+      }
+    }
+  </script>
+</body>
+</html>
