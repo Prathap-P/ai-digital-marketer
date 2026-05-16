@@ -2,3 +2,5 @@
 .venv
 .env*
 __pycache__/
+.github/instructions/wmt-copilot.instructions.md
+data/linkedin_token.json
