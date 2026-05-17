@@ -3,16 +3,16 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 PROMPTS_DIR = Path(__file__).parent / "prompts"
-
 
 class Settings(BaseSettings):
     """All runtime settings.  Override any field via environment variable."""
 
-    # ── LinkedIn ──────────────────────────────────────────────────────────────
-    linkedin_access_token: str = ""
-    linkedin_person_id: str = ""
+    # ── LinkedIn OAuth 2.0 ──────────────────────────────────────────────────────
+    linkedin_client_id: str = ""
+    linkedin_client_secret: str = ""
+    # Must match the redirect URI registered in your LinkedIn Developer app.
+    linkedin_redirect_uri: str = "http://localhost:8000/auth/linkedin/callback"
 
     # ── Reddit ────────────────────────────────────────────────────────────────
     reddit_client_id: str = ""
@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     reddit_username: str = ""
     reddit_password: str = ""
     reddit_default_subreddits: str = "MachineLearning,singularity,technology"
+
 
     # ── App ───────────────────────────────────────────────────────────────────
     dry_run: bool = False
@@ -36,7 +37,6 @@ class Settings(BaseSettings):
     def reddit_default_subreddits_list(self) -> list[str]:
         """Return the default subreddits as a parsed list."""
         return [s.strip() for s in self.reddit_default_subreddits.split(",") if s.strip()]
-
 
 # Module-level singleton — import this everywhere.
 settings = Settings()
