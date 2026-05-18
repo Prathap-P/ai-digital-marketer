@@ -26,11 +26,40 @@
     textarea { min-height: 180px; resize: vertical; }
     .error-banner { background: #fff0f0; color: #c0392b; border: 1px solid #e74c3c;
                     border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem; }
+    /* LinkedIn connection banner */
+    .li-banner {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.65rem 1rem; border-radius: 8px; margin-bottom: 1.5rem;
+      font-size: 0.88rem;
+    }
+    .li-banner.connected   { background: #eafaf1; border: 1px solid #27ae60; color: #1e8449; }
+    .li-banner.disconnected { background: #fdf6e3; border: 1px solid #f39c12; color: #7d6608; }
+    .li-banner .li-dot {
+      width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
+    }
+    .li-banner.connected   .li-dot { background: #27ae60; }
+    .li-banner.disconnected .li-dot { background: #e67e22; }
+    .li-banner a { margin-left: auto; font-size: 0.82rem; white-space: nowrap; }
   </style>
 </head>
 <body>
   <h1>AI Digital Marketer</h1>
   <p class="subtitle">Paste your material below. The system will generate platform-specific posts for review.</p>
+
+  <!-- LinkedIn connection status -->
+  {% if linkedin_connected %}
+  <div class="li-banner connected">
+    <span class="li-dot"></span>
+    <span>LinkedIn connected{% if linkedin_expires_at %} — token expires {{ linkedin_expires_at.strftime('%d %b %Y') }}{% endif %}</span>
+    <a href="/auth/linkedin/disconnect">Disconnect</a>
+  </div>
+  {% else %}
+  <div class="li-banner disconnected">
+    <span class="li-dot"></span>
+    <span>LinkedIn not connected — posts to LinkedIn will fail until you authorise.</span>
+    <a href="/auth/linkedin">Connect LinkedIn →</a>
+  </div>
+  {% endif %}
 
   {% if error %}
   <div class="error-banner">{{ error }}</div>

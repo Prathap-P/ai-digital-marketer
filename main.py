@@ -143,7 +143,14 @@ templates = Jinja2Templates(directory="templates")
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     """Render the input form."""
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "linkedin_connected": linkedin_auth.is_connected(),
+            "linkedin_expires_at": linkedin_auth.token_expires_at(),
+        },
+    )
 
 
 # ── LinkedIn OAuth 2.0 ─────────────────────────────────────────────────────────
