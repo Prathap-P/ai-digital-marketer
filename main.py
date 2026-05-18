@@ -16,13 +16,16 @@ GET  /history                     Post history dashboard.
 from __future__ import annotations
 
 import logging
+import secrets
 import threading
 import uuid
+from urllib.parse import urlencode
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
+import requests
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -41,6 +44,7 @@ from platforms.reddit import RedditPlatform
 from services.post_generator import generate_drafts, regenerate_draft
 from services.scheduler import scheduler
 from services.database import create_post_record, init_db, list_post_records
+from services import linkedin_auth
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -114,6 +118,7 @@ def _evict_expired_sessions() -> None:
 async def lifespan(app: FastAPI):  # noqa: ARG001
     """Start APScheduler and init the database on startup; stop on shutdown."""
     init_db()
+    linkedin_auth.load_token()
     scheduler.add_job(
         _evict_expired_sessions,
         trigger="interval",
@@ -140,6 +145,105 @@ async def index(request: Request) -> HTMLResponse:
     """Render the input form."""
     return templates.TemplateResponse("index.html", {"request": request})
 
+
+# ── LinkedIn OAuth 2.0 ─────────────────────────────────────────────────────────
+
+@app.get("/auth/linkedin")
+async def auth_linkedin_start() -> RedirectResponse:
+    """Redirect the user to LinkedIn's OAuth 2.0 consent screen."""
+    if not settings.linkedin_client_id:
+        raise HTTPException(
+            status_code=500,
+            detail="LINKEDIN_CLIENT_ID is not configured.",
+        )
+    state = secrets.token_urlsafe(24)
+    linkedin_auth.set_pending_state(state)
+    params = urlencode({
+        "response_type": "code",
+        "client_id": settings.linkedin_client_id,
+        "redirect_uri": settings.linkedin_redirect_uri,
+        "state": state,
+        "scope": "openid profile w_member_social",
+    })
+    return RedirectResponse(
+        f"https://www.linkedin.com/oauth/v2/authorization?{params}"
+    )
+
+
+@app.get("/auth/linkedin/callback", response_class=HTMLResponse)
+async def auth_linkedin_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    error_description: str = "",
+) -> RedirectResponse:
+    """Handle LinkedIn's OAuth callback, exchange code for token, store it."""
+    if error:
+        logger.warning("LinkedIn OAuth denied: %s — %s", error, error_description)
+        return RedirectResponse("/?linkedin_error=1")
+
+    expected_state = linkedin_auth.consume_pending_state()
+    if not expected_state or state != expected_state:
+        raise HTTPException(status_code=400, detail="Invalid OAuth state parameter.")
+
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing authorization code.")
+
+    # Exchange code for access token
+    token_resp = requests.post(
+        "https://www.linkedin.com/oauth/v2/accessToken",
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": settings.linkedin_redirect_uri,
+            "client_id": settings.linkedin_client_id,
+            "client_secret": settings.linkedin_client_secret,
+        },
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        timeout=15,
+    )
+    if not token_resp.ok:
+        logger.error("LinkedIn token exchange failed: %s", token_resp.text)
+        raise HTTPException(
+            status_code=502,
+            detail=f"LinkedIn token exchange failed: {token_resp.status_code}",
+        )
+
+    token_data = token_resp.json()
+    access_token: str = token_data["access_token"]
+    expires_in: int | None = token_data.get("expires_in")
+
+    # Fetch person ID via OpenID userinfo endpoint
+    userinfo_resp = requests.get(
+        "https://api.linkedin.com/v2/userinfo",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=10,
+    )
+    if not userinfo_resp.ok:
+        logger.error("LinkedIn userinfo failed: %s", userinfo_resp.text)
+        raise HTTPException(
+            status_code=502,
+            detail="Could not fetch LinkedIn profile after authentication.",
+        )
+
+    person_id: str = userinfo_resp.json().get("sub", "")
+    if not person_id:
+        raise HTTPException(
+            status_code=502,
+            detail="LinkedIn userinfo did not return a person ID.",
+        )
+
+    linkedin_auth.set_token(access_token, person_id, expires_in)
+    logger.info("LinkedIn connected — person ID: %s", person_id)
+    return RedirectResponse("/?linkedin_connected=1")
+
+
+@app.get("/auth/linkedin/disconnect")
+async def auth_linkedin_disconnect() -> RedirectResponse:
+    """Clear the stored LinkedIn token."""
+    linkedin_auth.disconnect()
+    return RedirectResponse("/")
 
 @app.post("/generate", response_class=HTMLResponse)
 async def generate(
