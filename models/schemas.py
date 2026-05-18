@@ -17,7 +17,9 @@ class PlatformDraft(BaseModel):
 
     platform: Platform
     content: str
-    subreddit: Optional[str] = None  # Reddit only
+    subreddit: Optional[str] = None        # Reddit only
+    media_urn: Optional[str] = None        # LinkedIn only — asset URN after upload
+    media_type: Optional[str] = None       # LinkedIn only — "image" or "document"
 
 
 class GenerateRequest(BaseModel):
@@ -53,7 +55,7 @@ class ScheduleRequest(BaseModel):
 
     session_id: str
     platform: Platform
-    subreddit: Optional[str] = None  # Reddit only — overrides the draft's stored subreddit
+    subreddit: Optional[str] = None   # Reddit only — overrides the draft's stored subreddit
 
 
 class ScheduleResult(BaseModel):
