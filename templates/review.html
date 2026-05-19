@@ -132,6 +132,54 @@
 
     .back-link { font-size: 0.88rem; color: var(--pico-muted-color); }
     .back-link a { color: inherit; }
+
+    /* LinkedIn media attachment */
+    .media-attach-section {
+      margin-top: 0.75rem;
+    }
+    .media-attach-label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--pico-muted-color);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.4rem;
+    }
+    .media-attach-row {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .media-attach-row input[type="file"] {
+      flex: 1;
+      min-width: 0;
+      font-size: 0.85rem;
+    }
+    .btn-attach {
+      background: #2980b9;
+      border-color: #2980b9;
+      color: #fff;
+      font-size: 0.85rem;
+      padding: 0.45rem 1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .btn-attach:hover  { background: #2471a3; border-color: #2471a3; }
+    .btn-attach:disabled { opacity: 0.6; cursor: not-allowed; }
+    .media-preview {
+      margin-top: 0.5rem;
+      font-size: 0.85rem;
+      color: var(--pico-muted-color);
+      display: none;
+    }
+    .media-preview.visible { display: flex; align-items: center; gap: 0.5rem; }
+    .media-preview img { max-height: 80px; border-radius: 4px; border: 1px solid var(--pico-muted-border-color); }
+    .media-remove {
+      background: none; border: none; cursor: pointer;
+      color: var(--pico-del-color); font-size: 0.85rem; padding: 0;
+    }
   </style>
 </head>
 <body>
@@ -163,21 +211,18 @@
       {% if draft.platform.value == 'reddit' %}
       <div>
         <p class="section-label">Target subreddit</p>
+
+        <!-- Manual override input -->
         <div class="subreddit-row">
           <span class="subreddit-prefix">r/</span>
           <input
             type="text"
             id="subreddit-{{ draft.platform.value }}"
-            list="subreddit-suggestions"
             value="{{ default_subreddits[0] if default_subreddits else 'MachineLearning' }}"
             placeholder="MachineLearning"
+
           />
         </div>
-        <datalist id="subreddit-suggestions">
-          {% for sub in default_subreddits %}
-          <option value="{{ sub }}"></option>
-          {% endfor %}
-        </datalist>
       </div>
       {% endif %}
 
@@ -204,6 +249,33 @@
 
       <!-- Status message -->
       <div class="status-msg" id="status-{{ draft.platform.value }}"></div>
+
+      <!-- LinkedIn media attachment (LinkedIn only) -->
+      {% if draft.platform.value == 'linkedin' %}
+      <div class="media-attach-section">
+        <p class="media-attach-label">Attach image or document</p>
+        <div class="media-attach-row">
+          <input
+            type="file"
+            id="media-file-{{ draft.platform.value }}"
+            accept="image/jpeg,image/png,image/gif,application/pdf,.docx,.pptx"
+          />
+          <button
+            type="button"
+            class="btn-attach"
+            id="attach-btn-{{ draft.platform.value }}"
+            onclick="attachMedia('{{ draft.platform.value }}', '{{ session_id }}')"
+          >Attach →</button>
+        </div>
+        <div class="media-preview" id="media-preview-{{ draft.platform.value }}">
+          <img id="media-thumb-{{ draft.platform.value }}" src="" alt="" style="display:none" />
+          <span id="media-label-{{ draft.platform.value }}"></span>
+          <button type="button" class="media-remove" onclick="removeMedia('{{ draft.platform.value }}')">✕ Remove</button>
+        </div>
+      </div>
+      {% endif %}
+
+
 
       <!-- Action buttons -->
       <div class="card-actions">
@@ -346,6 +418,68 @@
         setButtonsDisabled(platform, false);
         setStatus(platform, 'error', 'Scheduling failed: ' + err.message);
       }
+    }
+
+    // ── LinkedIn media attachment ─────────────────────────────────────────────
+    async function attachMedia(platform, sessionId) {
+      const fileInput = document.getElementById('media-file-' + platform);
+      const file = fileInput?.files?.[0];
+      if (!file) {
+        alert('Please select a file first.');
+        return;
+      }
+      const btn = document.getElementById('attach-btn-' + platform);
+      btn.disabled = true;
+      btn.textContent = 'Uploading…';
+
+      const formData = new FormData();
+      formData.append('session_id', sessionId);
+      formData.append('file', file);
+
+      try {
+        const resp = await fetch('/upload/linkedin', { method: 'POST', body: formData });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || `Upload failed (${resp.status})`);
+
+        // Show preview
+        const preview = document.getElementById('media-preview-' + platform);
+        const thumb   = document.getElementById('media-thumb-' + platform);
+        const label   = document.getElementById('media-label-' + platform);
+        preview.classList.add('visible');
+        label.textContent = `✓ ${data.media_type === 'image' ? 'Image' : 'Document'}: ${data.filename}`;
+        if (data.media_type === 'image') {
+          thumb.src = URL.createObjectURL(file);
+          thumb.style.display = 'inline-block';
+        } else {
+          thumb.style.display = 'none';
+        }
+        btn.textContent = '✓ Attached';
+        btn.style.background = '#27ae60';
+        btn.style.borderColor = '#27ae60';
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Attach →';
+        alert('Upload failed: ' + err.message);
+      }
+    }
+
+    function removeMedia(platform) {
+      // Clear the file input
+      const fileInput = document.getElementById('media-file-' + platform);
+      if (fileInput) fileInput.value = '';
+      // Hide preview
+      const preview = document.getElementById('media-preview-' + platform);
+      preview.classList.remove('visible');
+      // Reset button
+      const btn = document.getElementById('attach-btn-' + platform);
+      btn.disabled = false;
+      btn.textContent = 'Attach →';
+      btn.style.background = '';
+      btn.style.borderColor = '';
+      // Note: to fully detach the URN from the server session, a page reload is needed.
+      // For now, a note is shown.
+      const label = document.getElementById('media-label-' + platform);
+      if (label) label.textContent = '(Removed locally — reload page to fully detach from session)';
     }
   </script>
 </body>
