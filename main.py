@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 import requests
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -43,6 +43,7 @@ from platforms.linkedin import LinkedInPlatform
 from platforms.reddit import RedditPlatform
 from services.post_generator import generate_drafts, regenerate_draft
 from services.scheduler import scheduler
+from services.linkedin_upload import upload_image, upload_document
 from services.database import create_post_record, init_db, list_post_records
 from services import linkedin_auth
 
@@ -251,6 +252,85 @@ async def auth_linkedin_disconnect() -> RedirectResponse:
     """Clear the stored LinkedIn token."""
     linkedin_auth.disconnect()
     return RedirectResponse("/")
+
+# ── LinkedIn media upload ──────────────────────────────────────────────────────
+
+# Allowed MIME types for LinkedIn media uploads
+_LINKEDIN_IMAGE_MIMES = {"image/jpeg", "image/png", "image/gif"}
+_LINKEDIN_DOC_MIMES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # docx
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",  # pptx
+}
+_MAX_IMAGE_BYTES = 5 * 1024 * 1024       # 5 MB
+_MAX_DOC_BYTES   = 100 * 1024 * 1024     # 100 MB
+
+@app.post("/upload/linkedin")
+async def upload_linkedin_media(
+    session_id: Annotated[str, Form()],
+    file: UploadFile = File(...),
+) -> dict:
+    """Upload an image or document to LinkedIn and attach the URN to the session draft.
+
+    The file is uploaded immediately to LinkedIn's asset APIs so the URN is
+    available when the post is later scheduled.  The session draft is updated
+    in-place with ``media_urn`` and ``media_type``.
+    """
+    session = _get_session(session_id)
+
+    # Validate LinkedIn is connected
+    access_token = linkedin_auth.get_token()
+    person_id    = linkedin_auth.get_person_id()
+    if not access_token or not person_id:
+        raise HTTPException(
+            status_code=400,
+            detail="LinkedIn is not connected. Visit /auth/linkedin first.",
+        )
+
+    mime_type = file.content_type or ""
+    file_bytes = await file.read()
+
+    if mime_type in _LINKEDIN_IMAGE_MIMES:
+        if len(file_bytes) > _MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="Image exceeds 5 MB limit.")
+        try:
+            urn = upload_image(file_bytes, mime_type, person_id, access_token)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        media_type = "image"
+
+    elif mime_type in _LINKEDIN_DOC_MIMES:
+        if len(file_bytes) > _MAX_DOC_BYTES:
+            raise HTTPException(status_code=413, detail="Document exceeds 100 MB limit.")
+        try:
+            urn = upload_document(file_bytes, file.filename or "document", person_id, access_token)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        media_type = "document"
+
+    else:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported file type '{mime_type}'. "
+                   "Allowed: JPEG, PNG, GIF, PDF, DOCX, PPTX.",
+        )
+
+    # Attach the URN to the LinkedIn draft in the session
+    draft = session.drafts.get(Platform.LINKEDIN.value)
+    if draft is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No LinkedIn draft found in this session.",
+        )
+    session.drafts[Platform.LINKEDIN.value] = draft.model_copy(
+        update={"media_urn": urn, "media_type": media_type}
+    )
+
+    logger.info(
+        "LinkedIn media attached to session %s — type=%s urn=%s",
+        session_id, media_type, urn,
+    )
+    return {"media_urn": urn, "media_type": media_type, "filename": file.filename}
 
 @app.post("/generate", response_class=HTMLResponse)
 async def generate(
