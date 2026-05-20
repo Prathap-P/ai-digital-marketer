@@ -44,6 +44,7 @@ from platforms.reddit import RedditPlatform
 from services.post_generator import generate_drafts, regenerate_draft
 from services.scheduler import scheduler
 from services.linkedin_upload import upload_image, upload_document
+from services.subreddit_suggester import suggest_subreddits
 from services.database import create_post_record, init_db, list_post_records
 from services import linkedin_auth
 
@@ -68,6 +69,7 @@ class SessionData:
     """Holds all state for one drafting session."""
 
     drafts: dict[str, PlatformDraft]  # keyed by Platform.value
+    suggested_subreddits: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_accessed: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -80,10 +82,19 @@ _sessions: dict[str, SessionData] = {}
 _sessions_lock = threading.Lock()
 
 
-def _create_session(drafts: list[PlatformDraft]) -> str:
-    """Store drafts in a new session and return the session ID."""
+def _create_session(
+    drafts: list[PlatformDraft],
+    suggested_subreddits: list[str] | None = None,
+) -> str:
+    """Store drafts (and optional subreddit suggestions) in a new session.
+
+    Returns the session ID.
+    """
     session_id = str(uuid.uuid4())
-    data = SessionData(drafts={d.platform.value: d for d in drafts})
+    data = SessionData(
+        drafts={d.platform.value: d for d in drafts},
+        suggested_subreddits=suggested_subreddits or [],
+    )
     with _sessions_lock:
         _sessions[session_id] = data
     return session_id
@@ -389,8 +400,19 @@ async def generate(
             status_code=500,
         )
 
-    session_id = _create_session(drafts)
-    logger.info("Session created: %s (%d drafts)", session_id, len(drafts))
+    # Suggest subreddits when Reddit is among the selected platforms.
+    subreddit_suggestions: list[str] = []
+    if Platform.REDDIT in selected_platforms:
+        try:
+            subreddit_suggestions = suggest_subreddits(combined_input)
+        except Exception as exc:  # never block the main flow
+            logger.warning("Subreddit suggestion skipped: %s", exc)
+
+    session_id = _create_session(drafts, suggested_subreddits=subreddit_suggestions)
+    logger.info(
+        "Session created: %s (%d drafts, %d subreddit suggestions)",
+        session_id, len(drafts), len(subreddit_suggestions),
+    )
     return RedirectResponse(url=f"/review/{session_id}", status_code=303)
 
 
@@ -399,13 +421,15 @@ async def review(request: Request, session_id: str) -> HTMLResponse:
     """Render the review page for a given session."""
     session = _get_session(session_id)
     drafts = list(session.drafts.values())
+    # Prefer LLM-suggested subreddits; fall back to configured defaults.
+    subreddits = session.suggested_subreddits or settings.reddit_default_subreddits_list
     return templates.TemplateResponse(
         "review.html",
         {
             "request": request,
             "session_id": session_id,
             "drafts": drafts,
-            "default_subreddits": settings.reddit_default_subreddits_list,
+            "suggested_subreddits": subreddits,
         },
     )
 
