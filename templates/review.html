@@ -91,6 +91,29 @@
     }
     .subreddit-row input { flex: 1; margin-bottom: 0; }
 
+    /* Subreddit suggestion chips */
+    .subreddit-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-bottom: 0.6rem;
+    }
+    .chip {
+      font-size: 0.78rem;
+      font-weight: 500;
+      padding: 0.25rem 0.65rem;
+      border-radius: 999px;
+      border: 1.5px solid #FF4500;
+      color: #FF4500;
+      background: transparent;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      white-space: nowrap;
+      user-select: none;
+    }
+    .chip:hover  { background: #fff0eb; }
+    .chip.active { background: #FF4500; color: #fff; }
+
     .followup-section { display: flex; flex-direction: column; gap: 0.5rem; }
     .followup-textarea {
       width: 100%;
@@ -212,15 +235,27 @@
       <div>
         <p class="section-label">Target subreddit</p>
 
+        <!-- AI-suggested chips — click to select -->
+        {% if suggested_subreddits %}
+        <div class="subreddit-chips" id="chips-{{ draft.platform.value }}">
+          {% for sub in suggested_subreddits %}
+          <span
+            class="chip{% if loop.first %} active{% endif %}"
+            onclick="selectChip(this, '{{ draft.platform.value }}', '{{ sub }}')"
+          >r/{{ sub }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+
         <!-- Manual override input -->
         <div class="subreddit-row">
           <span class="subreddit-prefix">r/</span>
           <input
             type="text"
             id="subreddit-{{ draft.platform.value }}"
-            value="{{ default_subreddits[0] if default_subreddits else 'MachineLearning' }}"
+            value="{{ suggested_subreddits[0] if suggested_subreddits else 'MachineLearning' }}"
             placeholder="MachineLearning"
-
+            oninput="deselectChips('{{ draft.platform.value }}')"
           />
         </div>
       </div>
@@ -316,6 +351,21 @@
       const platform = ta.id.replace('draft-', '');
       updateCharCount(platform);
     });
+
+    // ── Subreddit chip selector ──────────────────────────────────────────────
+    function selectChip(chip, platform, subreddit) {
+      // Deactivate all chips in this group
+      document.querySelectorAll(`#chips-${platform} .chip`).forEach(c => c.classList.remove('active'));
+      // Activate the clicked chip
+      chip.classList.add('active');
+      // Sync to the text input
+      document.getElementById('subreddit-' + platform).value = subreddit;
+    }
+
+    function deselectChips(platform) {
+      // When the user types manually, clear the active chip state
+      document.querySelectorAll(`#chips-${platform} .chip`).forEach(c => c.classList.remove('active'));
+    }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
     function setStatus(platform, type, message) {
