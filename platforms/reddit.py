@@ -33,7 +33,9 @@ from config import settings
 from models.schemas import Platform as PlatformEnum
 from models.schemas import PlatformDraft, ScheduleResult
 from platforms.base import Platform
+from services.database import update_post_record
 from services.scheduler import scheduler
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -83,18 +85,25 @@ def _parse_reddit_draft(content: str) -> tuple[str, str]:
     return title, "\n".join(body_lines).strip()
 
 
-def _submit_post(content: str, subreddit: str) -> None:
+def _submit_post(
+    content: str,
+    subreddit: str,
+    record_id: Optional[int] = None,
+) -> None:
     """Perform the actual Reddit submission (called by APScheduler).
 
     Args:
         content:   Full draft content string (Title + Body format).
         subreddit: Target subreddit name (without r/ prefix).
+        record_id: Optional PostRecord ID to update after submission.
     """
     logger.info("APScheduler: submitting Reddit post to r/%s", subreddit)
     try:
         title, body = _parse_reddit_draft(content)
     except ValueError as exc:
         logger.error("Failed to parse Reddit draft: %s", exc)
+        if record_id is not None:
+            update_post_record(record_id, status="failed", error_detail=str(exc))
         return
 
     reddit = praw.Reddit(
@@ -106,11 +115,21 @@ def _submit_post(content: str, subreddit: str) -> None:
     )
     try:
         submission = reddit.subreddit(subreddit).submit(title=title, selftext=body)
+        post_url = f"https://reddit.com{submission.permalink}"
         logger.info(
             "Reddit post submitted successfully — submission ID: %s", submission.id
         )
+        if record_id is not None:
+            update_post_record(
+                record_id,
+                status="posted",
+                post_id=submission.id,
+                post_url=post_url,
+            )
     except praw.exceptions.PRAWException as exc:
         logger.error("Reddit submission failed: %s", exc)
+        if record_id is not None:
+            update_post_record(record_id, status="failed", error_detail=str(exc))
 
 
 class RedditPlatform(Platform):
@@ -120,14 +139,21 @@ class RedditPlatform(Platform):
     def name(self) -> str:
         return PlatformEnum.REDDIT.value
 
-    def schedule(self, draft: PlatformDraft, post_at: datetime) -> ScheduleResult:
+    def schedule(
+        self,
+        draft: PlatformDraft,
+        post_at: datetime,
+        record_id: Optional[int] = None,
+    ) -> ScheduleResult:
         """Schedule *draft* for publication on Reddit at *post_at*.
 
         The post is queued in APScheduler and submitted when the time arrives.
+        The DB record is updated to "posted" or "failed" after the job runs.
 
         Args:
-            draft:   Must be a REDDIT PlatformDraft.
-            post_at: UTC datetime for scheduled publication (must be future).
+            draft:     Must be a REDDIT PlatformDraft.
+            post_at:   UTC datetime for scheduled publication (must be future).
+            record_id: PostRecord ID to update once the APScheduler job fires.
 
         Returns:
             ScheduleResult confirming the job was queued.
@@ -166,7 +192,7 @@ class RedditPlatform(Platform):
             _submit_post,
             trigger="date",
             run_date=run_at,
-            args=[draft.content, subreddit],
+            args=[draft.content, subreddit, record_id],
             id=f"reddit_{subreddit}_{int(run_at.timestamp())}",
             replace_existing=True,
         )

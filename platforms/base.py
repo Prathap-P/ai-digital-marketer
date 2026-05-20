@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime
+from typing import Optional
 
 from models.schemas import PlatformDraft, ScheduleResult
 
@@ -26,12 +27,21 @@ class Platform(ABC):
         """Human-readable platform identifier (e.g. 'linkedin', 'reddit')."""
 
     @abstractmethod
-    def schedule(self, draft: PlatformDraft, post_at: datetime) -> ScheduleResult:
+    def schedule(
+        self,
+        draft: PlatformDraft,
+        post_at: datetime,
+        record_id: Optional[int] = None,
+    ) -> ScheduleResult:
         """Schedule *draft* to be published at *post_at* (UTC).
 
         Args:
-            draft:   The PlatformDraft to publish.
-            post_at: Exact UTC datetime when the post should go live.
+            draft:     The PlatformDraft to publish.
+            post_at:   Exact UTC datetime when the post should go live.
+            record_id: Optional PostRecord primary key.  Platforms that use
+                       background jobs (e.g. Reddit/APScheduler) should pass
+                       this to their job so they can update the DB row once the
+                       post is actually submitted.
 
         Returns:
             A ScheduleResult describing the outcome.
