@@ -1,5 +1,6 @@
 """Pydantic models shared across the application."""
 
+from datetime import datetime
 from enum import Enum
 from typing import Optional
 from pydantic import BaseModel, Field
@@ -56,6 +57,7 @@ class ScheduleRequest(BaseModel):
     session_id: str
     platform: Platform
     subreddit: Optional[str] = None   # Reddit only — overrides the draft's stored subreddit
+    post_at: Optional[datetime] = None  # UTC ISO-8601; defaults to now+24h when omitted
 
 
 class ScheduleResult(BaseModel):
