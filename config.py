@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     reddit_password: str = ""
     reddit_default_subreddits: str = "MachineLearning,singularity,technology"
 
+    # ── LLM / Local Model ─────────────────────────────────────────────────────
+    lm_studio_base_url: str = "http://localhost:1234/v1"
+    mlx_qwen_model_id: str = "mlx-community/Local-3.5-35B-A3B-4bit"
 
     # ── App ───────────────────────────────────────────────────────────────────
     dry_run: bool = False
