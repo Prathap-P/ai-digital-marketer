@@ -515,19 +515,41 @@ async def schedule(body: ScheduleRequest) -> ScheduleResult:
             detail=f"Platform '{body.platform.value}' is not configured.",
         )
 
-    post_at = datetime.now(timezone.utc) + timedelta(hours=24)
+    now = datetime.now(timezone.utc)
+
+    if body.post_at is not None:
+        # Normalise to UTC regardless of what the client sent
+        post_at = body.post_at.astimezone(timezone.utc) if body.post_at.tzinfo else body.post_at.replace(tzinfo=timezone.utc)
+        min_allowed = now + timedelta(minutes=5)
+        if post_at < min_allowed:
+            raise HTTPException(
+                status_code=422,
+                detail="Scheduled time must be at least 5 minutes in the future.",
+            )
+    else:
+        post_at = now + timedelta(hours=24)
+
+    # Persist the record before calling the platform so Reddit's APScheduler
+    # job has a valid record_id to update when it fires.
+    record_id = create_post_record(
+        platform=body.platform.value,
+        content=draft.content,
+        scheduled_at=post_at,
+        subreddit=draft.subreddit,
+    )
 
     try:
-        result = platform_handler.schedule(draft=draft, post_at=post_at)
+        result = platform_handler.schedule(draft=draft, post_at=post_at, record_id=record_id)
     except (ValueError, RuntimeError) as exc:
         logger.exception("Scheduling failed for %s: %s", body.platform.value, exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     logger.info(
-        "Scheduled %s for session %s at %s",
+        "Scheduled %s for session %s at %s (record_id=%s)",
         body.platform.value,
         body.session_id,
         post_at.isoformat(),
+        record_id,
     )
     return result
 
