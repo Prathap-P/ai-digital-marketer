@@ -142,6 +142,35 @@
     .btn-schedule:hover { background: #219a52; border-color: #219a52; }
     .btn-schedule:disabled, .btn-regenerate:disabled { opacity: 0.6; cursor: not-allowed; }
 
+    /* Schedule time picker */
+    .schedule-time-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+    }
+    .schedule-time-row label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--pico-muted-color);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+      margin: 0;
+    }
+    .schedule-time-row input[type="datetime-local"] {
+      flex: 1;
+      min-width: 200px;
+      margin: 0;
+      font-size: 0.88rem;
+      padding: 0.4rem 0.65rem;
+    }
+    .schedule-time-hint {
+      font-size: 0.76rem;
+      color: var(--pico-muted-color);
+      margin-top: 0.2rem;
+    }
+
     .status-msg {
       font-size: 0.85rem;
       border-radius: 6px;
@@ -209,8 +238,8 @@
   <p class="back-link"><a href="/">← Start over with new material</a></p>
   <h1>Review drafts</h1>
   <p class="subtitle">
-    Edit each draft directly, leave a follow-up instruction to refine, or schedule when you're happy.
-    Posts are scheduled <strong>24 hours from now</strong>.
+    Edit each draft directly, leave a follow-up instruction to refine, or pick a time and schedule.
+    Default is <strong>24 hours from now</strong> — change it per platform below.
   </p>
 
   <div class="drafts-grid">
@@ -310,7 +339,17 @@
       </div>
       {% endif %}
 
-
+      <!-- Schedule time picker -->
+      <div>
+        <div class="schedule-time-row">
+          <label for="post-at-{{ draft.platform.value }}">Schedule for</label>
+          <input
+            type="datetime-local"
+            id="post-at-{{ draft.platform.value }}"
+          />
+        </div>
+        <p class="schedule-time-hint">Times are in your local timezone and converted to UTC automatically.</p>
+      </div>
 
       <!-- Action buttons -->
       <div class="card-actions">
@@ -324,7 +363,7 @@
           class="btn-schedule"
           id="schedule-btn-{{ draft.platform.value }}"
           onclick="scheduleDraft('{{ draft.platform.value }}', '{{ session_id }}')"
-        >Schedule (24 h)</button>
+        >Schedule →</button>
       </div>
 
     </div>
@@ -350,6 +389,22 @@
     document.querySelectorAll('.draft-textarea').forEach(ta => {
       const platform = ta.id.replace('draft-', '');
       updateCharCount(platform);
+    });
+
+    // ── Schedule time picker defaults ────────────────────────────────────────
+    // Pre-fill each datetime-local input with now + 24h in local time.
+    function toLocalDatetimeValue(date) {
+      // datetime-local expects "YYYY-MM-DDTHH:MM" in local time
+      const pad = n => String(n).padStart(2, '0');
+      return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}` +
+             `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+
+    const default24h = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    document.querySelectorAll('input[type="datetime-local"]').forEach(input => {
+      input.value = toLocalDatetimeValue(default24h);
+      // Minimum = 5 minutes from now
+      input.min = toLocalDatetimeValue(new Date(Date.now() + 5 * 60 * 1000));
     });
 
     // ── Subreddit chip selector ──────────────────────────────────────────────
@@ -433,6 +488,20 @@
         ? document.getElementById('subreddit-' + platform)?.value.trim()
         : null;
 
+      // Read and convert the chosen datetime-local value to UTC ISO-8601
+      const dtInput = document.getElementById('post-at-' + platform);
+      let postAtISO = null;
+      if (dtInput && dtInput.value) {
+        // datetime-local is in local time — convert to UTC
+        const localDate = new Date(dtInput.value);
+        if (isNaN(localDate.getTime())) {
+          setButtonsDisabled(platform, false);
+          setStatus(platform, 'error', 'Invalid schedule time. Please pick a valid date and time.');
+          return;
+        }
+        postAtISO = localDate.toISOString(); // always UTC
+      }
+
       try {
         // First, sync the edited draft
         await fetch('/sync-draft', {
@@ -444,6 +513,7 @@
         // Then schedule
         const body = { session_id: sessionId, platform };
         if (subreddit) body.subreddit = subreddit;
+        if (postAtISO) body.post_at = postAtISO;
 
         const resp = await fetch('/schedule', {
           method: 'POST',
