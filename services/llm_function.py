@@ -1,25 +1,21 @@
 """
-LLM function contract.
+LLM function — LM Studio / ChatOpenAI integration.
 
-This is the single integration point for the external language model.
-Replace the stub body with the real implementation when ready.
+Single integration point for the external language model.
+Uses LM Studio's OpenAI-compatible API via langchain-openai.
 
-Contract
---------
-- `input_text`    : The full user-supplied context (writeup + URLs).
-  For follow-up calls this will be the follow-up instruction only;
-  the cloud model owns the conversation history.
-- `system_prompt` : The platform-specific system prompt loaded from prompts/.
-- Returns         : A plain string containing the generated post.
-
-The signature must not change — callers depend on it.
+Signature must not change — callers depend on it.
 """
 
 from __future__ import annotations
 
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 
-def generate_post(input_text: str, system_prompt: str) -> str:  # noqa: ARG001
-    """Generate a platform-specific post.
+from config import settings
+
+def generate_post(input_text: str, system_prompt: str) -> str:
+    """Generate a platform-specific post via LM Studio.
 
     Args:
         input_text: User context (writeup + resource URLs) or a follow-up
@@ -32,14 +28,23 @@ def generate_post(input_text: str, system_prompt: str) -> str:  # noqa: ARG001
     Raises:
         RuntimeError: If the underlying model call fails.
     """
-    # ── STUB ──────────────────────────────────────────────────────────────────
-    # Replace the block below with the real API / SDK call.
-    # The function must return a non-empty string.
-    # ─────────────────────────────────────────────────────────────────────────
-    preview = input_text[:120].replace("\n", " ")
-    return (
-        f"[STUB RESPONSE]\n\n"
-        f"This is a placeholder post generated from the input:\n"
-        f'"{preview}…"\n\n'
-        f"Replace services/llm_function.py with the real model call."
+    llm = ChatOpenAI(
+        base_url=settings.lm_studio_base_url,
+        api_key="test",
+        temperature=0.6,
+        model=settings.mlx_qwen_model_id,
+        top_p=0.9,
+        max_completion_tokens=15000,
+        model_kwargs={"frequency_penalty": 0.3, "presence_penalty": 0.2},
+        extra_body={"min_p": 0, "repeat_penalty": 1.15},
+        timeout=3600,
     )
+
+    messages = [SystemMessage(content=system_prompt), HumanMessage(content=input_text)]
+
+    try:
+        response = llm.invoke(messages)
+    except Exception as e:
+        raise RuntimeError(f"LM Studio model call failed: {e}") from e
+
+    return str(response.content)

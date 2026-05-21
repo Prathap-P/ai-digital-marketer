@@ -19,11 +19,11 @@ import logging
 import secrets
 import threading
 import uuid
-from urllib.parse import urlencode
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
+from urllib.parse import urlencode
 
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -41,12 +41,12 @@ from models.schemas import (
 from platforms.base import Platform as BasePlatform
 from platforms.linkedin import LinkedInPlatform
 from platforms.reddit import RedditPlatform
+from services import linkedin_auth
+from services.linkedin_upload import upload_image, upload_document
 from services.post_generator import generate_drafts, regenerate_draft
 from services.scheduler import scheduler
-from services.linkedin_upload import upload_image, upload_document
 from services.subreddit_suggester import suggest_subreddits
 from services.database import create_post_record, init_db, list_post_records
-from services import linkedin_auth
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -264,6 +264,7 @@ async def auth_linkedin_disconnect() -> RedirectResponse:
     linkedin_auth.disconnect()
     return RedirectResponse("/")
 
+
 # ── LinkedIn media upload ──────────────────────────────────────────────────────
 
 # Allowed MIME types for LinkedIn media uploads
@@ -342,6 +343,7 @@ async def upload_linkedin_media(
         session_id, media_type, urn,
     )
     return {"media_urn": urn, "media_type": media_type, "filename": file.filename}
+
 
 @app.post("/generate", response_class=HTMLResponse)
 async def generate(
@@ -442,14 +444,20 @@ async def regenerate(body: RegenerateRequest) -> dict:
     """
     session = _get_session(body.session_id)
 
+    existing = session.drafts.get(body.platform.value)
+    existing_draft_content = existing.content if existing else ""
+
     try:
-        updated_draft = regenerate_draft(follow_up=body.follow_up, platform=body.platform)
+        updated_draft = regenerate_draft(
+            follow_up=body.follow_up,
+            platform=body.platform,
+            existing_draft=existing_draft_content,
+        )
     except Exception as exc:
         logger.exception("Regeneration failed for %s: %s", body.platform.value, exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     # Preserve the previously selected subreddit (if any)
-    existing = session.drafts.get(body.platform.value)
     if existing and existing.subreddit:
         updated_draft = updated_draft.model_copy(update={"subreddit": existing.subreddit})
 
@@ -493,7 +501,12 @@ async def sync_draft(body: dict) -> dict:
 
 @app.post("/schedule")
 async def schedule(body: ScheduleRequest) -> ScheduleResult:
-    """Schedule the current draft for a platform to post 24 hours from now."""
+    """Schedule the current draft for a platform.
+
+    If body.post_at is provided (UTC ISO-8601) it is used directly.
+    Otherwise defaults to now + 24 hours.  The requested time must be at
+    least 5 minutes in the future.
+    """
     session = _get_session(body.session_id)
 
     draft = session.drafts.get(body.platform.value)
@@ -552,6 +565,7 @@ async def schedule(body: ScheduleRequest) -> ScheduleResult:
         record_id,
     )
     return result
+
 
 @app.get("/history", response_class=HTMLResponse)
 async def history(request: Request) -> HTMLResponse:

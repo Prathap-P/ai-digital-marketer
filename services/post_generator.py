@@ -25,7 +25,6 @@ _PROMPT_FILES: dict[Platform, str] = {
     Platform.REDDIT: "reddit.md",
 }
 
-
 def _load_system_prompt(platform: Platform) -> str:
     """Read and return the system prompt for *platform*.
 
@@ -45,7 +44,6 @@ def _load_system_prompt(platform: Platform) -> str:
             f"System prompt not found for {platform.value}: {prompt_path}"
         )
     return prompt_path.read_text(encoding="utf-8")
-
 
 def generate_drafts(
     input_text: str,
@@ -71,24 +69,26 @@ def generate_drafts(
 
     return drafts
 
-
 def regenerate_draft(
     follow_up: str,
     platform: Platform,
+    existing_draft: str = "",
 ) -> PlatformDraft:
     """Regenerate a single platform draft using a follow-up instruction.
-
-    The cloud model behind the LLM function owns the conversation history,
-    so only the follow-up delta is sent as input.
 
     Args:
         follow_up: Refinement instruction from the user.
         platform: Platform whose draft should be regenerated.
+        existing_draft: The current draft text to give the model context.
 
     Returns:
         An updated PlatformDraft.
     """
     logger.info("Regenerating draft for %s with follow-up", platform.value)
     system_prompt = _load_system_prompt(platform)
-    content = generate_post(input_text=follow_up, system_prompt=system_prompt)
+    if existing_draft:
+        input_text = f"[Existing draft:]\n{existing_draft}\n\n[Follow-up instruction:]\n{follow_up}"
+    else:
+        input_text = follow_up
+    content = generate_post(input_text=input_text, system_prompt=system_prompt)
     return PlatformDraft(platform=platform, content=content)
